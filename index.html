@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gestion des Présences</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0a0f0a;--surface:#111a11;--surface2:#182018;--border:#243024;--accent:#43e97b;--accent2:#00c6ff;--green:#43e97b;--orange:#f7971e;--red:#ff4757;--text:#f0f8f0;--muted:#6b8a6b;--r:10px;}
@@ -156,6 +157,21 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 .eicon{font-size:32px;margin-bottom:10px;}
 .mb8{margin-bottom:8px;}.mb12{margin-bottom:12px;}.mb16{margin-bottom:16px;}
 .fgap{display:flex;gap:12px;flex-wrap:wrap;}
+.sea{margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)}
+.sea-t{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:10px}
+.sea-bar{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.sea-bar button{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer}
+.sea-bar button:hover{border-color:var(--accent);color:var(--accent)}
+.sea-ed,.sea-v{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.55;min-height:90px;outline:none;word-break:break-word}
+.sea-ed:focus{border-color:var(--accent)}
+.sea-v{min-height:0;background:var(--surface2)}
+.sea-ed ul,.sea-v ul,.sea-ed ol,.sea-v ol{margin:4px 0 4px 22px}
+.sea-ed h3,.sea-v h3{font-size:15px;margin:6px 0 2px;color:var(--accent)}
+.sea-f{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.sea-c{flex:1;font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+.subtabs{display:flex;gap:6px;margin-bottom:14px}
+.sub{background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.sub.on{border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -214,7 +230,7 @@ async function api(action, params={}) {
   //   - pas de preflight CORS (content-type simple)
   //   - pas de limite de taille d'URL
   //   - GAS reçoit via e.parameter exactement comme un GET
-  const WRITES = ['saveAppel','saveConfig','savePersonnes','createFeuille','deleteFeuille','resetAppels'];
+  const WRITES = ['saveSeance','saveAppel','saveConfig','savePersonnes','createFeuille','deleteFeuille','resetAppels'];
   const p = {action, ...params};
   // Sérialiser les objets
   const flat = {};
@@ -340,7 +356,7 @@ async function createSheet(){
     const cfg={days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
     await api('saveConfig',{id,data:cfg});
     await api('savePersonnes',{id,data:[]});
-    S={id,name,pwd:btoa(unescape(encodeURIComponent(pwd))),config:cfg,persons:[],records:{}};
+    S={id,name,pwd:btoa(unescape(encodeURIComponent(pwd))),config:cfg,persons:[],records:{},seances:{}};
     hideLoader();enterApp();
   }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
 }
@@ -377,6 +393,7 @@ async function loginSheet(){
     console.log('[login] personnes chargées:', persons);
     showLoader('Chargement de l\'historique...');
     const records = await api('getAppels',{id});
+    let seances={};seaErr='';try{seances=(await api('getSeances',{id}))||{};}catch(e){seaErr=e.message;console.warn('[getSeances]',e.message);}
 
     // Normaliser les personnes (startDate, active depuis Sheets)
     const safePersons = (persons||[]).map(p=>({
@@ -384,7 +401,7 @@ async function loginSheet(){
       startDate: p.startDate ? String(p.startDate).slice(0,10) : (cfg.yearStart||today()),
       active: p.active !== false && p.active !== 'false'
     }));
-    S={id,name:meta.name,pwd:meta.pwd,config:cfg,persons:safePersons,records:records||{}};
+    S={id,name:meta.name,pwd:meta.pwd,config:cfg,persons:safePersons,records:records||{},seances};
     hideLoader();enterApp();
   }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
 }
@@ -467,8 +484,8 @@ function renderAppel(){
   if(isCall&&!done)html+=buildDay(t,true);
   else if(isCall&&done){
     const r=S.records[t];
-    if(r&&r.__cancelled)html+=`<div class="card"><div class="today-ok">🚫 Séance du ${fmtShort(t)} annulée.</div></div>`;
-    else html+=`<div class="card"><div class="today-ok">✅ L'appel du ${fmtShort(t)} a été effectué.</div></div>`;
+    if(r&&r.__cancelled)html+=`<div class="card"><div class="today-ok">🚫 Séance du ${fmtShort(t)} annulée.</div>${seaBox(t)}</div>`;
+    else html+=`<div class="card"><div class="today-ok">✅ L'appel du ${fmtShort(t)} a été effectué.</div>${seaBox(t)}</div>`;
   }else html+=`<div class="card"><div class="empty"><div class="eicon">📅</div>Pas d'appel aujourd'hui<br><small style="color:var(--muted)">${(cfg.days||[]).map(d=>DAYS[d]).join(', ')}</small></div></div>`;
   if(missed.length){html+=`<div class="card"><div class="card-title" style="margin-bottom:14px">📂 Appels manqués</div>`;missed.forEach(d=>{html+=buildDay(d,false);});html+=`</div>`;}
   el.innerHTML=html;
@@ -495,7 +512,7 @@ function buildDay(date,isToday){
           <button class="sbtn ${st==='justified'?'aj':''}" onclick="setSt('${date}','${p.id}','justified')">📋 Justifiée</button>
         </div></div>`;
     });
-    h+=`</div><div style="margin-top:14px"><button class="btn btn-sm" onclick="valider('${date}')">Valider l'appel</button></div>`;
+    h+=`</div>${seaBox(date)}<div style="margin-top:14px"><button class="btn btn-sm" onclick="valider('${date}')">Valider l'appel</button></div>`;
   }
   h+=`</div>`;return h;
 }
@@ -580,7 +597,7 @@ function renderHistorique(){
         html+=`<div class="hprow"><span>${pe.name}</span><div style="display:flex;align-items:center;gap:8px">${stH}<button class="btn btn-sm btn-ghost" style="padding:4px 10px;font-size:11px" onclick="editRec('${date}','${pe.id}')">Modifier</button></div></div>`;
       });
     }else{html+=`<div style="padding:10px 0;color:var(--muted);font-size:13px">${isPast?'Appel manqué':'Pas encore effectué'}</div>`;}
-    html+=`</div></div>`;
+    html+=seaBox(date)+`</div></div>`;
   });
   el.innerHTML=html;
 }
@@ -764,8 +781,171 @@ function renderAdmin(){
         <div style="font-size:11px;color:var(--muted);margin-top:6px">Supprime tout définitivement.</div>
       </div>
     </div></div>`;
-  el.innerHTML=html;
+  el.innerHTML=admSubs()+`<div style="display:${admSub==='main'?'block':'none'}">${html}</div><div style="display:${admSub==='export'?'block':'none'}">${exportPanel()}</div>`;
   initDnD();
+}
+
+// ═══════════════════════════
+// CONTENU DE SÉANCE — texte formaté, stocké dans la Google Sheet, relu et vérifié
+// ═══════════════════════════
+let seaErr='';const SEA={drafts:{}},SEA_MAX=45000,SEA_TAGS=['P','DIV','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','UL','OL','LI','H3'];
+const sg=d=>(S.seances||{})[d]||{};
+const seaDt=s=>{const d=new Date(s);return isNaN(d)?'':' · '+d.toLocaleString('fr-FR',{dateStyle:'short',timeStyle:'short'});};
+// Nettoyage strict (liste blanche, aucun attribut) : appliqué à l'enregistrement ET à l'affichage
+function cleanHtml(html){
+  const t=document.createElement('template');t.innerHTML=html||'';
+  (function w(n){[...n.childNodes].forEach(c=>{
+    if(c.nodeType===3)return;
+    if(c.nodeType!==1||/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|LINK|META|TEMPLATE)$/.test(c.tagName)){c.remove();return;}
+    w(c);
+    if(SEA_TAGS.includes(c.tagName))[...c.attributes].forEach(a=>c.removeAttribute(a.name));else c.replaceWith(...c.childNodes);
+  });})(t.content);
+  return t.content.textContent.trim()?t.innerHTML.trim():'';
+}
+function seaBox(date){
+  const s=sg(date);let h=`<div class="sea" data-date="${date}"><div class="sea-t">📝 Contenu de la séance</div>`;
+  if(SEA.drafts[date]!==undefined){
+    const B=[['bold','<b>G</b>'],['italic','<i>I</i>'],['underline','<u>S</u>'],['strikeThrough','<s>B</s>'],['H','Titre'],['insertUnorderedList','• Liste'],['insertOrderedList','1. Liste'],['removeFormat','✕ Effacer']];
+    h+=`<div class="sea-bar">${B.map(([c,l])=>`<button type="button" onmousedown="event.preventDefault()" onclick="seaCmd('${c}')">${l}</button>`).join('')}</div>
+    <div class="sea-ed" contenteditable="true" oninput="seaInput(this)" onpaste="seaPaste(event)">${cleanHtml(SEA.drafts[date])}</div>
+    <div class="sea-f"><span class="sea-c">Non enregistré</span><button class="btn btn-sm" onclick="seaSave('${date}')">💾 Enregistrer</button><button class="btn btn-sm btn-ghost" onclick="seaCancel('${date}')">Annuler</button></div>`;
+  }else if(s.html){
+    h+=`<div class="sea-v">${cleanHtml(s.html)}</div><div class="sea-f"><span class="sea-c">${s.verified?'✓ Enregistré et vérifié':'Enregistré'}${seaDt(s.updatedAt)}</span><button class="btn btn-sm btn-ghost" onclick="seaEdit('${date}')">✏️ Modifier</button><button class="btn btn-sm btn-ghost" onclick="seaVerify('${date}')">↻ Vérifier</button></div>`;
+  }else h+=`<button class="btn btn-sm btn-outline" onclick="seaEdit('${date}')">＋ Ajouter un contenu</button>`;
+  return h+(seaErr?`<div class="msg error" style="margin:8px 0 0">Script Google à mettre à jour (nouvelle version) : ${seaErr}</div>`:'')+`</div>`;
+}
+const seaEd=d=>document.querySelector(`.tc.active .sea[data-date="${d}"] .sea-ed`);
+function seaRefresh(d){document.querySelectorAll(`.sea[data-date="${d}"]`).forEach(e=>e.outerHTML=seaBox(d));}
+function seaEdit(d){try{document.execCommand('defaultParagraphSeparator',false,'p');}catch(e){}SEA.drafts[d]=sg(d).html||'';seaRefresh(d);const e=seaEd(d);if(e)e.focus();}
+function seaCancel(d){delete SEA.drafts[d];seaRefresh(d);}
+function seaInput(ed){const b=ed.closest('.sea');SEA.drafts[b.dataset.date]=ed.innerHTML;b.querySelector('.sea-c').textContent='Non enregistré · '+cleanHtml(ed.innerHTML).length+' / '+SEA_MAX+' car.';}
+function seaPaste(e){e.preventDefault();document.execCommand('insertText',false,(e.clipboardData||window.clipboardData).getData('text/plain'));}
+function seaCmd(c){
+  const ed=document.querySelector('.tc.active .sea-ed');if(!ed)return;ed.focus();
+  if(c==='H')document.execCommand('formatBlock',false,document.queryCommandValue('formatBlock').toLowerCase()==='h3'?'p':'h3');else document.execCommand(c,false,null);
+  seaInput(ed);
+}
+// Enregistre puis compare avec ce que la Google Sheet a réellement stocké (relu côté script)
+async function seaSave(d){
+  const ed=seaEd(d);if(!ed)return;const html=cleanHtml(ed.innerHTML);
+  if(html.length>SEA_MAX)return toast('Contenu trop long ('+html.length+' / '+SEA_MAX+')','err');
+  showLoader('Enregistrement du contenu…');
+  try{
+    const back=await api('saveSeance',{id:S.id,date:d,data:{html}});
+    if((back&&back.html||'')!==html)throw new Error('vérification échouée : le contenu relu dans la Google Sheet est différent');
+    if(!S.seances)S.seances={};
+    if(html)S.seances[d]={html,updatedAt:back.updatedAt,verified:true};else delete S.seances[d];
+    delete SEA.drafts[d];seaErr='';hideLoader();seaRefresh(d);toast('Contenu enregistré et vérifié ✓');
+  }catch(e){hideLoader();toast('Erreur : '+e.message,'err');}
+}
+// Relit la Google Sheet et compare avec ce qui est affiché
+async function seaVerify(d){
+  showLoader('Relecture depuis la Google Sheet…');
+  try{
+    const all=(await api('getSeances',{id:S.id}))||{};const same=(all[d]||{}).html===sg(d).html;
+    S.seances=all;if(all[d])all[d].verified=true;hideLoader();seaRefresh(d);
+    toast(same?'✓ Identique à la Google Sheet':'⚠️ Contenu mis à jour depuis la Google Sheet',same?'ok':'err');
+  }catch(e){hideLoader();toast('Erreur : '+e.message,'err');}
+}
+
+// ═══════════════════════════
+// ADMIN › EXPORT EXCEL (ExcelJS : couleurs, filtres, mise en forme conservée)
+// ═══════════════════════════
+let admSub='main';
+function admSubs(){return`<div class="subtabs"><button class="sub ${admSub==='main'?'on':''}" onclick="admGo('main')">⚙️ Réglages</button><button class="sub ${admSub==='export'?'on':''}" onclick="admGo('export')">📥 Export Excel</button></div>`;}
+function admGo(s){admSub=s;renderAdmin();}
+function exportPanel(){
+  const days=getCallDays(),r=d=>S.records[d]||{};
+  return`<div class="card"><div class="card-title" style="margin-bottom:10px">📥 Export Excel complet</div>
+  <div style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.6">Classeur en 4 onglets : <b>Synthèse</b> (chiffres clés, taux de présence), <b>Appels</b> (personnes × dates, en couleurs), <b>Détail</b> (une ligne par appel, filtrable) et <b>Contenus de séance</b> (texte avec mise en forme).<br>
+  ${days.length?fmtShort(days[0])+' → '+fmtShort(days[days.length-1]):'Aucune séance'} · ${days.length} séance(s) · ${days.filter(d=>r(d).__validated&&!r(d).__cancelled).length} appel(s) effectué(s) · ${days.filter(d=>sg(d).html).length} contenu(s) de séance</div>
+  <button class="btn" onclick="exportFull()">📥 Télécharger le classeur Excel</button></div>`;
+}
+function richFromHtml(html){
+  const body=new DOMParser().parseFromString(html||'','text/html').body,runs=[];
+  const add=(text,f)=>{if(text)runs.push({text,font:{name:'Calibri',size:11,...f}});};
+  const nl=()=>{const l=runs[runs.length-1];if(l&&!l.text.endsWith('\n'))add('\n',{});};
+  (function w(n,f){n.childNodes.forEach(c=>{
+    if(c.nodeType===3){const s=c.textContent.replace(/\s+/g,' ');if(s===' '&&(!runs.length||runs[runs.length-1].text.endsWith('\n')))return;return add(s,f);}
+    if(c.nodeType!==1)return;
+    const t=c.tagName.toLowerCase(),g={...f};
+    if(t==='b'||t==='strong'||t==='h3')g.bold=true;if(t==='h3')g.size=13;
+    if(t==='i'||t==='em')g.italic=true;if(t==='u')g.underline=true;if(/^(s|strike|del)$/.test(t))g.strike=true;
+    if(t==='br')return add('\n',{});
+    if(t==='ul'||t==='ol'){nl();let k=0;c.childNodes.forEach(x=>{if(x.nodeName==='LI'){nl();add(t==='ol'?(++k)+'. ':'• ',g);w(x,g);}});return nl();}
+    const blk=/^(p|div|h3)$/.test(t);if(blk)nl();w(c,g);if(blk)nl();
+  });})(body,{});
+  while(runs.length&&!runs[runs.length-1].text.trim())runs.pop();
+  if(runs.length)runs[runs.length-1].text=runs[runs.length-1].text.replace(/\s+$/,'');
+  return runs;
+}
+async function exportFull(){
+  if(!window.ExcelJS)return toast('ExcelJS non chargé (connexion internet ?)','err');
+  try{
+    const days=getCallDays(),ps=S.persons.filter(p=>p.active!==false),rec=d=>S.records[d]||{};
+    const sx=d=>rec(d).__cancelled?'Annulée':rec(d).__validated?'Effectué':'Non fait';
+    const ST={present:['P','Présent','FFD9F2E3','FF1B7F3B'],absent:['A','Absent','FFFBD5D8','FFC0392B'],justified:['J','Justifié','FFD6EEFB','FF1F78B4']};
+    const fill=c=>({type:'pattern',pattern:'solid',fgColor:{argb:c}}),bd={style:'thin',color:{argb:'FFBFBFBF'}},box={top:bd,left:bd,bottom:bd,right:bd};
+    const ud=d=>{const[y,m,x]=d.split('-').map(Number);return new Date(Date.UTC(y,m-1,x));};
+    const head=row=>row.eachCell({includeEmpty:true},c=>{c.fill=fill('FF1B4D2E');c.font={bold:true,color:{argb:'FFFFFFFF'}};c.alignment={horizontal:'center',vertical:'middle',wrapText:true};c.border=box;});
+    const wb=new ExcelJS.Workbook();wb.creator='Gestion des présences';wb.created=new Date();
+    const sheet=n=>wb.addWorksheet(n,{pageSetup:{orientation:'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0}});
+    const stat=p=>{let P=0,A=0,J=0;days.forEach(d=>{const r=rec(d);if(r.__validated&&!r.__cancelled&&personsAt(d).some(x=>x.id===p.id)){const s=r[p.id];if(s==='present')P++;else if(s==='absent')A++;else if(s==='justified')J++;}});const T=P+A+J;return{P,A,J,T,r:T?P/T:null};};
+    const rate=(c,v)=>{c.numFmt='0%';if(typeof v==='number')c.fill=fill(v>=.8?'FFD9F2E3':v>=.5?'FFFFE8C2':'FFFBD5D8');};
+    const per=days.length?fmtShort(days[0])+' → '+fmtShort(days[days.length-1]):'—';
+
+    // 1) SYNTHÈSE
+    let w=sheet('Synthèse');w.columns=[{width:34},{width:14},{width:14},{width:14},{width:12},{width:18}];
+    w.getCell('A1').value=`Feuille d'appel — ${S.name}`;w.getCell('A1').font={bold:true,size:16,color:{argb:'FF1B4D2E'}};
+    w.getCell('A2').value=`Période : ${per}   ·   Export du ${fmtShort(today())}`;w.getCell('A2').font={italic:true,color:{argb:'FF666666'}};
+    [['Séances prévues',days.length],['Appels effectués',days.filter(d=>sx(d)==='Effectué').length],['Séances annulées',days.filter(d=>sx(d)==='Annulée').length],['Appels non faits',days.filter(d=>sx(d)==='Non fait').length],['Contenus de séance renseignés',days.filter(d=>sg(d).html).length]]
+      .forEach((k,i)=>{const row=w.getRow(4+i);row.getCell(1).value=k[0];row.getCell(2).value=k[1];row.getCell(1).font={bold:true};row.getCell(1).fill=fill('FFEFF7F1');row.getCell(2).alignment={horizontal:'center'};[1,2].forEach(n=>row.getCell(n).border=box);});
+    const hr=w.getRow(11);hr.values=['Nom','Présences','Absences','Justifiées','Total','Taux de présence'];head(hr);
+    ps.forEach((p,i)=>{const s=stat(p),row=w.getRow(12+i);row.values=[p.name,s.P,s.A,s.J,s.T,s.r===null?'—':s.r];row.eachCell({includeEmpty:true},(c,n)=>{c.border=box;if(n>1)c.alignment={horizontal:'center'};});rate(row.getCell(6),s.r);});
+
+    // 2) APPELS (personnes × dates)
+    w=sheet('Appels');const nc=days.length;w.getColumn(1).width=28;
+    const lab={'Effectué':'✓','Annulée':'Annulée','Non fait':'Non fait'};
+    w.addRow(['Nom',...days.map(d=>d.slice(8)+'/'+d.slice(5,7)+'/'+d.slice(2,4)),'Présences','Absences','Justifiées','Taux']);
+    w.addRow(['Jour',...days.map(d=>DAYS[dow(d)].slice(0,3)+'.'),'','','','']);
+    w.addRow(['État',...days.map(d=>lab[sx(d)]),'','','','']);
+    [1,2,3].forEach(i=>head(w.getRow(i)));
+    days.forEach((d,i)=>w.getColumn(i+2).width=9);[0,1,2,3].forEach(i=>w.getColumn(nc+2+i).width=11);
+    ps.forEach(p=>{
+      const s=stat(p),row=w.addRow([p.name,...days.map(d=>{const r=rec(d);if(r.__cancelled)return'';if(!personsAt(d).some(x=>x.id===p.id))return'—';const t=ST[r[p.id]];return t?t[0]:'';}),s.P,s.A,s.J,s.r===null?'—':s.r]);
+      row.eachCell({includeEmpty:true},(c,n)=>{c.border=box;if(n>1)c.alignment={horizontal:'center'};});
+      days.forEach((d,i)=>{const c=row.getCell(i+2),r=rec(d),t=ST[r[p.id]];
+        if(r.__cancelled)c.fill=fill('FFE5E5E5');else if(c.value==='—'){c.fill=fill('FFF2F2F2');c.font={color:{argb:'FFAAAAAA'}};}else if(t){c.fill=fill(t[2]);c.font={bold:true,color:{argb:t[3]}};}});
+      rate(row.getCell(nc+5),s.r);
+    });
+    w.addRow([]);w.addRow(['Légende : P = Présent · A = Absent · J = Justifié · — = pas encore inscrit(e) · gris = séance annulée']).font={italic:true,color:{argb:'FF666666'}};
+    w.views=[{state:'frozen',xSplit:1,ySplit:3}];
+
+    // 3) DÉTAIL (une ligne par personne et par appel)
+    w=sheet('Détail');w.columns=[{header:'Date',width:13},{header:'Jour',width:12},{header:'Personne',width:30},{header:'Statut',width:16},{header:'Appel',width:12}];head(w.getRow(1));
+    days.forEach(d=>{const r=rec(d);personsAt(d).forEach(p=>{
+      const t=ST[r[p.id]],row=w.addRow([ud(d),DAYS[dow(d)],p.name,r.__cancelled?'Séance annulée':t?t[1]:'—',sx(d)]);
+      row.eachCell(c=>c.border=box);row.getCell(1).numFmt='dd/mm/yyyy';const c=row.getCell(4);
+      if(r.__cancelled)c.fill=fill('FFE5E5E5');else if(t){c.fill=fill(t[2]);c.font={bold:true,color:{argb:t[3]}};}
+    });});
+    w.autoFilter={from:'A1',to:'E1'};w.views=[{state:'frozen',ySplit:1}];
+
+    // 4) CONTENUS DE SÉANCE (mise en forme conservée)
+    w=sheet('Contenus de séance');w.columns=[{header:'Date',width:13},{header:'Jour',width:12},{header:'État',width:11},{header:'Présents',width:10},{header:'Absents',width:10},{header:'Justifiés',width:10},{header:'Contenu de la séance',width:90}];head(w.getRow(1));
+    days.forEach(d=>{
+      const r=rec(d),n=[0,0,0];if(!r.__cancelled)personsAt(d).forEach(p=>{const i=['present','absent','justified'].indexOf(r[p.id]);if(i>=0)n[i]++;});
+      const rich=richFromHtml(sg(d).html),txt=rich.map(x=>x.text).join(''),row=w.addRow([ud(d),DAYS[dow(d)],sx(d),...n,rich.length?{richText:rich}:'—']);
+      row.eachCell(c=>{c.border=box;c.alignment={vertical:'top',wrapText:true};});row.getCell(1).numFmt='dd/mm/yyyy';
+      if(!rich.length)row.getCell(7).font={italic:true,color:{argb:'FFAAAAAA'}};
+      row.height=Math.min(409,Math.max(20,txt.split('\n').reduce((a,l)=>a+Math.max(1,Math.ceil(l.length/95)),0)*15+6));
+    });
+    w.views=[{state:'frozen',ySplit:1}];
+
+    const buf=await wb.xlsx.writeBuffer(),a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download=`appels_${S.name.replace(/[^\w-]+/g,'_')}_${today()}.xlsx`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+    toast('Excel téléchargé ✓');
+  }catch(e){console.error(e);toast('Erreur export : '+e.message,'err');}
 }
 
 async function toggleDay(i){
