@@ -6,6 +6,7 @@
 <title>Gestion des Présences</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📋%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0a0f0a;--surface:#111a11;--surface2:#182018;--border:#243024;--accent:#43e97b;--accent2:#00c6ff;--green:#43e97b;--orange:#f7971e;--red:#ff4757;--text:#f0f8f0;--muted:#6b8a6b;--r:10px;}
@@ -219,7 +220,7 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 // ═══════════════════════════
 // CONFIG
 // ═══════════════════════════
-const API = 'https://script.google.com/macros/s/AKfycbxB7_w7-3k0DDvIXOr4Pv2lGXxmdbhcCKAY1wdDjIreDtK43c9sd0xkoPc9JV86-SVa/exec';
+const API = 'https://script.google.com/macros/s/AKfycbxVPFH7CtkB12yM9s2MXKRvk3Xz_j72rrqns1s5Edm-bAwz40wQn9JHSo7t2aGGGau0/exec';
 
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
@@ -230,13 +231,27 @@ async function fetchT(url,opt,action,ms){
   catch(e){if(e.name==='AbortError')throw new Error('Délai dépassé ('+ms/1000+' s) pour « '+action+' » : le script Google ne répond pas');throw e;}
   finally{clearTimeout(t);}
 }
-async function api(action, params={}) {
+let wPend=0,writeSeq=0;
+const WR=['saveSeance','saveAppels','saveAppel','saveConfig','savePersonnes','createFeuille','deleteFeuille','resetAppels'];
+async function api(action,params={}){
+  const w=WR.includes(action);if(w){wPend++;writeSeq++;}
+  try{
+    for(let n=1;;n++){
+      try{return await api1(action,params);}
+      catch(e){
+        if(n>=3||!/Action inconnue: undefined|Failed to fetch|NetworkError|Load failed|^Réponse:/.test(e.message))throw e;
+        await new Promise(r=>setTimeout(r,1500*n));
+      }
+    }
+  }finally{if(w){wPend--;writeSeq++;}}
+}
+async function api1(action, params={}) {
   // Les lectures restent en GET (simple, rapide)
   // Les écritures utilisent POST form-urlencoded :
   //   - pas de preflight CORS (content-type simple)
   //   - pas de limite de taille d'URL
   //   - GAS reçoit via e.parameter exactement comme un GET
-  const WRITES = ['saveSeance','saveAppel','saveConfig','savePersonnes','createFeuille','deleteFeuille','resetAppels'];
+  const WRITES = ['saveSeance','saveAppels','saveAppel','saveConfig','savePersonnes','createFeuille','deleteFeuille','resetAppels'];
   const p = {action, ...params};
   // Sérialiser les objets
   const flat = {};
@@ -302,7 +317,7 @@ document.getElementById('modalOv').addEventListener('click',e=>{if(e.target.id==
 // ═══════════════════════════
 function showView(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));document.getElementById(id).classList.add('active');}
 function goHome(){showView('vAccueil');}
-function disconnect(){S=null;goHome();}
+function disconnect(){S=null;sessionClear();goHome();}
 function switchTab(name,el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
@@ -361,21 +376,27 @@ async function createSheet(){
     await api('saveConfig',{id,data:cfg});
     await api('savePersonnes',{id,data:[]});
     S={id,name,pwd:btoa(unescape(encodeURIComponent(pwd))),config:cfg,persons:[],records:{},seances:{},seaLoaded:true};
-    hideLoader();enterApp();
+    sessionSave();hideLoader();enterApp();
   }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
 }
 
-async function loginSheet(){
-  const name=document.getElementById('lName').value.trim();
-  const pwd=document.getElementById('lPwd').value;
-  if(!name||!pwd)return showMsg('authMsg','Remplissez tous les champs','error');
-  const id='s_'+name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
-  showLoader('Connexion...');
+async function loginSheet(auto){
+  let id,pwdB;
+  if(auto){id=auto.id;pwdB=auto.pwd;}
+  else{
+    const name=document.getElementById('lName').value.trim();
+    const pwd=document.getElementById('lPwd').value;
+    if(!name||!pwd)return showMsg('authMsg','Remplissez tous les champs','error');
+    id='s_'+name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
+    pwdB=btoa(unescape(encodeURIComponent(pwd)));
+  }
+  const fail=(t,clr)=>{hideLoader();if(auto){if(clr)sessionClear();goHome();toast(t,'err');}else showMsg('authMsg',t,'error');};
+  showLoader(auto?'Reconnexion...':'Connexion...');
   try{
     // Étape 1 : vérifier que la feuille existe et le mdp
     const meta=await api('getFeuille',{id});
-    if(!meta){hideLoader();return showMsg('authMsg','Feuille introuvable','error');}
-    if(meta.pwd!==btoa(unescape(encodeURIComponent(pwd)))){hideLoader();return showMsg('authMsg','Mot de passe incorrect','error');}
+    if(!meta)return fail('Feuille introuvable',1);
+    if(meta.pwd!==pwdB)return fail('Mot de passe incorrect',1);
 
     // Étape 2 : charger config + personnes
     showLoader('Chargement des données...');
@@ -405,8 +426,8 @@ async function loginSheet(){
       active: p.active !== false && p.active !== 'false'
     }));
     S={id,name:meta.name,pwd:meta.pwd,config:cfg,persons:safePersons,records:records||{},seances:{},seaLoaded:false};
-    hideLoader();enterApp();seaLoad();
-  }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
+    sessionSave();hideLoader();enterApp();seaLoad();
+  }catch(e){fail('Erreur : '+e.message);}
 }
 
 function enterApp(){
@@ -428,6 +449,7 @@ function enterApp(){
 // Le script supprime les lignes existantes pour cette date et réinsère
 async function saveAppel(date){
   await api('saveAppel',{id:S.id, date, data:S.records[date]||{}});
+  if(S.dirty)delete S.dirty[date];
 }
 async function saveConfig(){await api('saveConfig',{id:S.id,data:S.config});}
 async function savePersonnes(){await api('savePersonnes',{id:S.id,data:S.persons});}
@@ -522,6 +544,7 @@ function buildDay(date,isToday){
 
 // Clic sur un statut → uniquement en mémoire, PAS de sauvegarde
 function setSt(date,pid,status){
+  (S.dirty=S.dirty||{})[date]=1;
   if(!S.records[date])S.records[date]={};
   S.records[date][pid]=status;
   const row=document.getElementById(`pr_${date}_${pid}`);
@@ -1204,22 +1227,76 @@ async function processFullImport(file){
         }
         if(saves.length){
           showLoader('Enregistrement des appels...');
-          const uniqueDates=[...new Set(saves)];
+          const uniqueDates=[...new Set(saves)],failed=[];
           await savePersonnes();
-          for(const d of uniqueDates){ await saveAppel(d); }
-          hideLoader();log.push(`✓ ${imported} statuts sur ${uniqueDates.length} dates`);
+          // Une seule requête pour toutes les dates (script à jour) ; sinon repli date par date
+          const recs={};uniqueDates.forEach(d=>recs[d]=S.records[d]||{});
+          try{await api('saveAppels',{id:S.id,data:recs});}
+          catch(er){
+            if(!/Action inconnue: saveAppels/.test(er.message))throw er;
+            for(let k=0;k<uniqueDates.length;k++){
+              showLoader(`Enregistrement des appels… ${k+1}/${uniqueDates.length}`);
+              try{await saveAppel(uniqueDates[k]);}catch(e2){failed.push(uniqueDates[k]);}
+            }
+          }
+          hideLoader();log.push(`✓ ${imported} statuts sur ${uniqueDates.length-failed.length} dates`);
+          if(failed.length)log.push(`⚠️ ${failed.length} date(s) non enregistrée(s) : ${failed.slice(0,4).join(', ')}${failed.length>4?'…':''} — relancez l'import`);
         }
       }
 
       if(!log.length){showMsg('histMsg','Aucune donnée reconnue','error');return;}
-      showMsg('histMsg',log.join(' | '),'success');
-      toast('Import complet ✓');renderAdmin();renderAppel();
+      showMsg('histMsg',log.join(' | '),log.some(l=>l.startsWith('⚠️'))?'error':'success');
+      toast('Import terminé');renderAdmin();renderAppel();
     }catch(err){hideLoader();showMsg('histMsg','Erreur : '+err.message,'error');console.error(err);}
   };
   reader.readAsArrayBuffer(file);
 }
 
+// ═══════════════════════════
+// SESSION (reste connecté 30 jours) + ACTUALISATION AUTOMATIQUE
+// ═══════════════════════════
+const SES_KEY='presence_session_v1',SES_DAYS=30;
+function sessionSave(){try{localStorage.setItem(SES_KEY,JSON.stringify({id:S.id,name:S.name,pwd:S.pwd,t:Date.now()}));}catch(e){}}
+function sessionClear(){try{localStorage.removeItem(SES_KEY);}catch(e){}}
+function sessionGet(){try{const s=JSON.parse(localStorage.getItem(SES_KEY)||'null');return s&&s.id&&s.pwd&&Date.now()-s.t<SES_DAYS*864e5?s:null;}catch(e){return null;}}
+const nrm=o=>JSON.stringify(o,(k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(x=>[x,v[x]])):v);
+function normLoaded(config,persons){
+  const cfg=config||{days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
+  const fixT=t=>{const m=String(t||'').match(/(\d{1,2}):(\d{2})/);return m?m[1].padStart(2,'0')+':'+m[2]:'18:00';};
+  cfg.timeStart=fixT(cfg.timeStart);cfg.timeEnd=fixT(cfg.timeEnd);
+  if(cfg.yearStart)cfg.yearStart=safeIso(cfg.yearStart)||today();
+  if(cfg.yearEnd)cfg.yearEnd=safeIso(cfg.yearEnd)||'';
+  const safePersons=(persons||[]).map(p=>({...p,startDate:p.startDate?String(p.startDate).slice(0,10):(cfg.yearStart||today()),active:p.active!==false&&p.active!=='false'}));
+  return{cfg,safePersons};
+}
+// Relit la Google Sheet ; ne touche jamais à ce qui est en cours de saisie (statuts non validés, contenus en brouillon)
+let refBusy=false,refLast=0;
+async function refreshData(){
+  if(!S||refBusy||document.hidden||Date.now()-refLast<20000||wPend>0)return;
+  const tab=['tcAppel','tcHistorique','tcStats'].find(i=>document.getElementById(i).classList.contains('active'));
+  if(!tab||Object.keys(SEA.drafts).length||document.getElementById('modalOv').classList.contains('open'))return;
+  const sid=S.id,w0=writeSeq;refBusy=true;
+  try{
+    const [config,persons,records,seances]=await Promise.all([api('getConfig',{id:sid}),api('getPersonnes',{id:sid}),api('getAppels',{id:sid}),api('getSeances',{id:sid}).catch(()=>null)]);
+    if(!S||S.id!==sid||writeSeq!==w0||wPend>0)return;
+    const {cfg,safePersons}=normLoaded(config,persons);
+    const rec={...(records||{})};Object.keys(S.dirty||{}).forEach(d=>{if(S.records[d])rec[d]=S.records[d];});
+    const useSea=S.seaLoaded&&seances,sea={};
+    if(useSea)Object.entries(seances).forEach(([d,v])=>{const o=S.seances[d];sea[d]=o&&o.html===v.html?o:v;});
+    const hs=m=>nrm(Object.fromEntries(Object.entries(m||{}).map(([d,v])=>[d,v.html])));
+    if(nrm(S.config)===nrm(cfg)&&nrm(S.persons)===nrm(safePersons)&&nrm(S.records)===nrm(rec)&&!(useSea&&hs(S.seances)!==hs(sea)))return;
+    S.config=cfg;S.persons=safePersons;S.records=rec;if(useSea)S.seances=sea;
+    ({tcAppel:renderAppel,tcHistorique:renderHistorique,tcStats:renderStats}[tab])();
+    toast('↻ Données mises à jour');
+  }catch(e){console.warn('[refresh]',e.message);}
+  finally{refBusy=false;refLast=Date.now();}
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshData();});
+window.addEventListener('focus',()=>refreshData());
+setInterval(()=>refreshData(),120000);
+
 goHome();
+{const ses=sessionGet();if(ses)loginSheet(ses);}
 </script>
 </body>
 </html>
