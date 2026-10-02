@@ -220,7 +220,7 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 // ═══════════════════════════
 // CONFIG
 // ═══════════════════════════
-const API = 'https://script.google.com/macros/s/AKfycbxVPFH7CtkB12yM9s2MXKRvk3Xz_j72rrqns1s5Edm-bAwz40wQn9JHSo7t2aGGGau0/exec';
+const API = 'https://script.google.com/macros/s/AKfycbxH2xEJLLFj3AalhpUQbXKkDyVyFuup8gTLuK9RvAw4SAkYrC4nIjoLUsdP96euCI6W/exec';
 
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
@@ -382,54 +382,73 @@ async function createSheet(){
 
 async function loginSheet(auto){
   let id,pwdB;
-  if(auto){id=auto.id;pwdB=auto.pwd;}
-  else{
+  if(auto){
+    id=auto.id;
+    pwdB=auto.pwd;
+  }else{
     const name=document.getElementById('lName').value.trim();
     const pwd=document.getElementById('lPwd').value;
     if(!name||!pwd)return showMsg('authMsg','Remplissez tous les champs','error');
     id='s_'+name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
     pwdB=btoa(unescape(encodeURIComponent(pwd)));
   }
-  const fail=(t,clr)=>{hideLoader();if(auto){if(clr)sessionClear();goHome();toast(t,'err');}else showMsg('authMsg',t,'error');};
+
+  const fail=(t,clr)=>{
+    hideLoader();
+    if(auto){
+      if(clr)sessionClear();
+      goHome();
+      toast(t,'err');
+    }else showMsg('authMsg',t,'error');
+  };
+
   showLoader(auto?'Reconnexion...':'Connexion...');
   try{
-    // Étape 1 : vérifier que la feuille existe et le mdp
-    const meta=await api('getFeuille',{id});
-    if(!meta)return fail('Feuille introuvable',1);
-    if(meta.pwd!==pwdB)return fail('Mot de passe incorrect',1);
-
-    // Étape 2 : charger config + personnes
+    // UNE SEULE requête HTTP pour authentifier et charger les données essentielles.
     showLoader('Chargement des données...');
-    const [config, persons] = await Promise.all([
-      api('getConfig',{id}),
-      api('getPersonnes',{id})
-    ]);
+    const boot=await api('bootstrap',{id,pwd:pwdB});
+    if(!boot)return fail('Feuille introuvable',1);
 
-    // Sanitize config (Sheets peut renvoyer des dates mal formatées)
-    const cfg = config || {days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
-    function fixT(t){if(!t)return'18:00';const s=String(t);const m=s.match(/(\d{1,2}):(\d{2})/);return m?m[1].padStart(2,'0')+':'+m[2]:'18:00';}
+    const cfg=boot.config||{days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
+    function fixT(t){
+      if(!t)return'18:00';
+      const m=String(t).match(/(\d{1,2}):(\d{2})/);
+      return m?m[1].padStart(2,'0')+':'+m[2]:'18:00';
+    }
     cfg.timeStart=fixT(cfg.timeStart);
     cfg.timeEnd=fixT(cfg.timeEnd);
-    // Normaliser les dates de config — Sheets peut renvoyer "Thu Oct 02 2025..." ou "2025-10-02"
     if(cfg.yearStart)cfg.yearStart=safeIso(cfg.yearStart)||today();
     if(cfg.yearEnd)cfg.yearEnd=safeIso(cfg.yearEnd)||'';
 
-    // Étape 3 : charger les appels depuis Sheets
-    console.log('[login] personnes chargées:', persons);
-    showLoader('Chargement de l\'historique...');
-    const records = await api('getAppels',{id});
-
-    // Normaliser les personnes (startDate, active depuis Sheets)
-    const safePersons = (persons||[]).map(p=>({
+    const safePersons=(boot.persons||[]).map(p=>({
       ...p,
-      startDate: p.startDate ? String(p.startDate).slice(0,10) : (cfg.yearStart||today()),
-      active: p.active !== false && p.active !== 'false'
+      startDate:p.startDate?String(p.startDate).slice(0,10):(cfg.yearStart||today()),
+      active:p.active!==false&&p.active!=='false'
     }));
-    S={id,name:meta.name,pwd:meta.pwd,config:cfg,persons:safePersons,records:records||{},seances:{},seaLoaded:false};
-    sessionSave();hideLoader();enterApp();seaLoad();
-  }catch(e){fail('Erreur : '+e.message);}
-}
 
+    S={
+      id:boot.feuille.id,
+      name:boot.feuille.name,
+      pwd:boot.feuille.pwd,
+      config:cfg,
+      persons:safePersons,
+      records:boot.records||{},
+      seances:{},
+      seaLoaded:false,
+      dirty:{}
+    };
+
+    sessionSave();
+    hideLoader();
+    enterApp();
+
+    // Les contenus de séance restent volontairement hors du chemin critique.
+    seaLoad();
+  }catch(e){
+    const bad=/Mot de passe incorrect|Feuille introuvable/.test(e.message||'');
+    fail(e.message||'Erreur de connexion',bad);
+  }
+}
 function enterApp(){
   document.getElementById('hName').textContent=S.name;
   const c=S.config;
@@ -1275,21 +1294,44 @@ async function refreshData(){
   if(!S||refBusy||document.hidden||Date.now()-refLast<20000||wPend>0)return;
   const tab=['tcAppel','tcHistorique','tcStats'].find(i=>document.getElementById(i).classList.contains('active'));
   if(!tab||Object.keys(SEA.drafts).length||document.getElementById('modalOv').classList.contains('open'))return;
-  const sid=S.id,w0=writeSeq;refBusy=true;
+
+  const sid=S.id,w0=writeSeq,oldDirty={...(S.dirty||{})};
+  refBusy=true;
   try{
-    const [config,persons,records,seances]=await Promise.all([api('getConfig',{id:sid}),api('getPersonnes',{id:sid}),api('getAppels',{id:sid}),api('getSeances',{id:sid}).catch(()=>null)]);
+    // Une seule requête au lieu de 4 appels parallèles.
+    const boot=await api('bootstrap',{id:sid,pwd:S.pwd});
     if(!S||S.id!==sid||writeSeq!==w0||wPend>0)return;
-    const {cfg,safePersons}=normLoaded(config,persons);
-    const rec={...(records||{})};Object.keys(S.dirty||{}).forEach(d=>{if(S.records[d])rec[d]=S.records[d];});
-    const useSea=S.seaLoaded&&seances,sea={};
-    if(useSea)Object.entries(seances).forEach(([d,v])=>{const o=S.seances[d];sea[d]=o&&o.html===v.html?o:v;});
-    const hs=m=>nrm(Object.fromEntries(Object.entries(m||{}).map(([d,v])=>[d,v.html])));
-    if(nrm(S.config)===nrm(cfg)&&nrm(S.persons)===nrm(safePersons)&&nrm(S.records)===nrm(rec)&&!(useSea&&hs(S.seances)!==hs(sea)))return;
-    S.config=cfg;S.persons=safePersons;S.records=rec;if(useSea)S.seances=sea;
+
+    const cfg=boot.config||{days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
+    const fixT=t=>{const m=String(t||'').match(/(\d{1,2}):(\d{2})/);return m?m[1].padStart(2,'0')+':'+m[2]:'18:00';};
+    cfg.timeStart=fixT(cfg.timeStart);cfg.timeEnd=fixT(cfg.timeEnd);
+    if(cfg.yearStart)cfg.yearStart=safeIso(cfg.yearStart)||today();
+    if(cfg.yearEnd)cfg.yearEnd=safeIso(cfg.yearEnd)||'';
+
+    const persons=(boot.persons||[]).map(p=>({
+      ...p,
+      startDate:p.startDate?String(p.startDate).slice(0,10):(cfg.yearStart||today()),
+      active:p.active!==false&&p.active!=='false'
+    }));
+
+    // Ne jamais écraser une saisie locale marquée dirty.
+    const records={...(boot.records||{})};
+    Object.keys(oldDirty).forEach(d=>{if(S.records[d])records[d]=S.records[d];});
+
+    if(nrm(S.config)===nrm(cfg)&&nrm(S.persons)===nrm(persons)&&nrm(S.records)===nrm(records))return;
+
+    S.config=cfg;
+    S.persons=persons;
+    S.records=records;
+    S.dirty=oldDirty;
     ({tcAppel:renderAppel,tcHistorique:renderHistorique,tcStats:renderStats}[tab])();
     toast('↻ Données mises à jour');
-  }catch(e){console.warn('[refresh]',e.message);}
-  finally{refBusy=false;refLast=Date.now();}
+  }catch(e){
+    console.warn('[refresh]',e.message);
+  }finally{
+    refBusy=false;
+    refLast=Date.now();
+  }
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshData();});
 window.addEventListener('focus',()=>refreshData());
