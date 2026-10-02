@@ -224,6 +224,12 @@ const API = 'https://script.google.com/macros/s/AKfycbxB7_w7-3k0DDvIXOr4Pv2lGXxm
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
 // ═══════════════════════════
+async function fetchT(url,opt,action,ms){
+  const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);
+  try{const r=await fetch(url,{...opt,signal:ac.signal});return await r.text();}
+  catch(e){if(e.name==='AbortError')throw new Error('Délai dépassé ('+ms/1000+' s) pour « '+action+' » : le script Google ne répond pas');throw e;}
+  finally{clearTimeout(t);}
+}
 async function api(action, params={}) {
   // Les lectures restent en GET (simple, rapide)
   // Les écritures utilisent POST form-urlencoded :
@@ -243,20 +249,18 @@ async function api(action, params={}) {
     const body = Object.entries(flat)
       .map(([k,v]) => encodeURIComponent(k)+'='+encodeURIComponent(v))
       .join('&');
-    const r = await fetch(API, {
+    const text = await fetchT(API, {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body
-    });
-    const text = await r.text();
+    }, action, 90000);
     let d; try { d = JSON.parse(text); } catch(e) { throw new Error('Réponse: '+text.slice(0,200)); }
     if (!d.ok) throw new Error(d.error || 'Erreur API');
     return d.data;
   } else {
     // GET pour les lectures
     const qs = Object.entries(flat).map(([k,v]) => encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
-    const r = await fetch(API + '?' + qs);
-    const text = await r.text();
+    const text = await fetchT(API + '?' + qs, {}, action, 40000);
     let d; try { d = JSON.parse(text); } catch(e) { throw new Error('Réponse: '+text.slice(0,200)); }
     if (!d.ok) throw new Error(d.error || 'Erreur API');
     return d.data;
@@ -356,7 +360,7 @@ async function createSheet(){
     const cfg={days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
     await api('saveConfig',{id,data:cfg});
     await api('savePersonnes',{id,data:[]});
-    S={id,name,pwd:btoa(unescape(encodeURIComponent(pwd))),config:cfg,persons:[],records:{},seances:{}};
+    S={id,name,pwd:btoa(unescape(encodeURIComponent(pwd))),config:cfg,persons:[],records:{},seances:{},seaLoaded:true};
     hideLoader();enterApp();
   }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
 }
@@ -393,7 +397,6 @@ async function loginSheet(){
     console.log('[login] personnes chargées:', persons);
     showLoader('Chargement de l\'historique...');
     const records = await api('getAppels',{id});
-    let seances={};seaErr='';try{seances=(await api('getSeances',{id}))||{};}catch(e){seaErr=e.message;console.warn('[getSeances]',e.message);}
 
     // Normaliser les personnes (startDate, active depuis Sheets)
     const safePersons = (persons||[]).map(p=>({
@@ -401,8 +404,8 @@ async function loginSheet(){
       startDate: p.startDate ? String(p.startDate).slice(0,10) : (cfg.yearStart||today()),
       active: p.active !== false && p.active !== 'false'
     }));
-    S={id,name:meta.name,pwd:meta.pwd,config:cfg,persons:safePersons,records:records||{},seances};
-    hideLoader();enterApp();
+    S={id,name:meta.name,pwd:meta.pwd,config:cfg,persons:safePersons,records:records||{},seances:{},seaLoaded:false};
+    hideLoader();enterApp();seaLoad();
   }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
 }
 
@@ -535,6 +538,7 @@ function setSt(date,pid,status){
 
 // Valider → sauvegarde vers Sheets
 async function valider(date){
+  if(SEA.drafts[date]!==undefined){const ed=seaEd(date);if(ed&&cleanHtml(ed.innerHTML)!==(sg(date).html||'')&&!(await seaSave(date)))return;}
   const persons=personsAt(date);const rec=S.records[date]||{};
   const unset=persons.filter(p=>!rec[p.id]);
   if(unset.length&&!confirm(`${unset.length} personne(s) sans statut. Continuer ?`))return;
@@ -804,15 +808,16 @@ function cleanHtml(html){
 }
 function seaBox(date){
   const s=sg(date);let h=`<div class="sea" data-date="${date}"><div class="sea-t">📝 Contenu de la séance</div>`;
+  if(!S.seaLoaded)return h+(seaErr?`<div class="msg error" style="margin:0">Contenus de séance indisponibles : ${seaErr}<br><button class="btn btn-sm btn-ghost" style="margin-top:8px" onclick="seaLoad()">↻ Réessayer</button></div>`:`<div class="sea-c">Chargement du contenu…</div>`)+`</div>`;
   if(SEA.drafts[date]!==undefined){
     const B=[['bold','<b>G</b>'],['italic','<i>I</i>'],['underline','<u>S</u>'],['strikeThrough','<s>B</s>'],['H','Titre'],['insertUnorderedList','• Liste'],['insertOrderedList','1. Liste'],['removeFormat','✕ Effacer']];
-    h+=`<div class="sea-bar">${B.map(([c,l])=>`<button type="button" onmousedown="event.preventDefault()" onclick="seaCmd('${c}')">${l}</button>`).join('')}</div>
+    h+=`<div class="sea-bar">${B.map(([c,l])=>`<button type="button" onmousedown="event.preventDefault()" onclick="seaCmd('${c}',this)">${l}</button>`).join('')}</div>
     <div class="sea-ed" contenteditable="true" oninput="seaInput(this)" onpaste="seaPaste(event)">${cleanHtml(SEA.drafts[date])}</div>
-    <div class="sea-f"><span class="sea-c">Non enregistré</span><button class="btn btn-sm" onclick="seaSave('${date}')">💾 Enregistrer</button><button class="btn btn-sm btn-ghost" onclick="seaCancel('${date}')">Annuler</button></div>`;
+    <div class="sea-f"><span class="sea-c">Non enregistré</span><button class="btn btn-sm" onclick="seaSave('${date}')">💾 Enregistrer</button>${isDone(date)?'':`<button class="btn btn-sm btn-outline" onclick="seaSaveValidate('${date}')">✓ Enregistrer + valider l'appel</button>`}<button class="btn btn-sm btn-ghost" onclick="seaCancel('${date}')">Annuler</button></div>`;
   }else if(s.html){
     h+=`<div class="sea-v">${cleanHtml(s.html)}</div><div class="sea-f"><span class="sea-c">${s.verified?'✓ Enregistré et vérifié':'Enregistré'}${seaDt(s.updatedAt)}</span><button class="btn btn-sm btn-ghost" onclick="seaEdit('${date}')">✏️ Modifier</button><button class="btn btn-sm btn-ghost" onclick="seaVerify('${date}')">↻ Vérifier</button></div>`;
   }else h+=`<button class="btn btn-sm btn-outline" onclick="seaEdit('${date}')">＋ Ajouter un contenu</button>`;
-  return h+(seaErr?`<div class="msg error" style="margin:8px 0 0">Script Google à mettre à jour (nouvelle version) : ${seaErr}</div>`:'')+`</div>`;
+  return h+`</div>`;
 }
 const seaEd=d=>document.querySelector(`.tc.active .sea[data-date="${d}"] .sea-ed`);
 function seaRefresh(d){document.querySelectorAll(`.sea[data-date="${d}"]`).forEach(e=>e.outerHTML=seaBox(d));}
@@ -820,8 +825,8 @@ function seaEdit(d){try{document.execCommand('defaultParagraphSeparator',false,'
 function seaCancel(d){delete SEA.drafts[d];seaRefresh(d);}
 function seaInput(ed){const b=ed.closest('.sea');SEA.drafts[b.dataset.date]=ed.innerHTML;b.querySelector('.sea-c').textContent='Non enregistré · '+cleanHtml(ed.innerHTML).length+' / '+SEA_MAX+' car.';}
 function seaPaste(e){e.preventDefault();document.execCommand('insertText',false,(e.clipboardData||window.clipboardData).getData('text/plain'));}
-function seaCmd(c){
-  const ed=document.querySelector('.tc.active .sea-ed');if(!ed)return;ed.focus();
+function seaCmd(c,b){
+  const ed=b.closest('.sea').querySelector('.sea-ed');if(!ed)return;ed.focus();
   if(c==='H')document.execCommand('formatBlock',false,document.queryCommandValue('formatBlock').toLowerCase()==='h3'?'p':'h3');else document.execCommand(c,false,null);
   seaInput(ed);
 }
@@ -835,9 +840,27 @@ async function seaSave(d){
     if((back&&back.html||'')!==html)throw new Error('vérification échouée : le contenu relu dans la Google Sheet est différent');
     if(!S.seances)S.seances={};
     if(html)S.seances[d]={html,updatedAt:back.updatedAt,verified:true};else delete S.seances[d];
-    delete SEA.drafts[d];seaErr='';hideLoader();seaRefresh(d);toast('Contenu enregistré et vérifié ✓');
-  }catch(e){hideLoader();toast('Erreur : '+e.message,'err');}
+    delete SEA.drafts[d];seaErr='';hideLoader();seaRefresh(d);toast('Contenu enregistré et vérifié ✓');return true;
+  }catch(e){hideLoader();toast('Erreur : '+e.message,'err');return false;}
 }
+// Enregistre le contenu PUIS valide l'appel (la séance sort des appels manqués)
+async function seaSaveValidate(d){
+  if(!(await seaSave(d)))return;
+  await valider(d);
+  if(isDone(d))renderHistorique();
+}
+// Chargement en arrière-plan (l'appli reste utilisable même si le script ne répond pas)
+async function seaLoad(){
+  const sid=S&&S.id;if(!sid)return;
+  seaErr='';seaRefreshAll();
+  try{
+    const all=(await api('getSeances',{id:sid}))||{};
+    if(!S||S.id!==sid)return;
+    S.seances=all;S.seaLoaded=true;
+  }catch(e){seaErr=e.message;console.warn('[getSeances]',e.message);}
+  seaRefreshAll();
+}
+function seaRefreshAll(){if(!S)return;new Set([...document.querySelectorAll('.sea')].map(e=>e.dataset.date)).forEach(d=>{if(SEA.drafts[d]===undefined)seaRefresh(d);});}
 // Relit la Google Sheet et compare avec ce qui est affiché
 async function seaVerify(d){
   showLoader('Relecture depuis la Google Sheet…');
@@ -882,6 +905,7 @@ function richFromHtml(html){
 async function exportFull(){
   if(!window.ExcelJS)return toast('ExcelJS non chargé (connexion internet ?)','err');
   try{
+    if(!S.seaLoaded){showLoader('Chargement des contenus de séance…');await seaLoad();hideLoader();if(!S.seaLoaded&&!confirm('Les contenus de séance sont indisponibles. Exporter quand même sans eux ?'))return;}
     const days=getCallDays(),ps=S.persons.filter(p=>p.active!==false),rec=d=>S.records[d]||{};
     const sx=d=>rec(d).__cancelled?'Annulée':rec(d).__validated?'Effectué':'Non fait';
     const ST={present:['P','Présent','FFD9F2E3','FF1B7F3B'],absent:['A','Absent','FFFBD5D8','FFC0392B'],justified:['J','Justifié','FFD6EEFB','FF1F78B4']};
