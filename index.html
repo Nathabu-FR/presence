@@ -173,6 +173,14 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 .subtabs{display:flex;gap:6px;margin-bottom:14px}
 .sub{background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
 .sub.on{border-color:var(--accent);color:var(--accent)}
+.server-state{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at 50% 20%,rgba(67,233,123,.08),transparent 42%),var(--bg);}
+.server-card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:34px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+.server-icon{font-size:52px;margin-bottom:14px}.server-title{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:2px;margin-bottom:8px}
+.server-sub{font-size:14px;color:var(--muted);line-height:1.65;margin:0 auto 20px;max-width:470px}
+.server-hours{display:inline-block;padding:8px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface2);font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);}
+.server-contact{margin-top:22px;padding-top:18px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6}
+.server-contact a{color:var(--accent2);text-decoration:none}.server-contact a:hover{text-decoration:underline}
+
 </style>
 </head>
 <body>
@@ -193,6 +201,23 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
   <div class="auth-wrap">
     <button class="btn btn-ghost btn-sm mb16" onclick="goHome()" style="margin-bottom:16px">← Retour</button>
     <div class="auth-box" id="authBox"></div>
+  </div>
+</div>
+
+<!-- ÉTAT DU SERVEUR -->
+<div id="vServerState" class="view">
+  <div class="server-state">
+    <div class="server-card">
+      <div class="server-icon" id="serverStateIcon">🌙</div>
+      <div class="server-title" id="serverStateTitle">Serveur momentanément indisponible</div>
+      <p class="server-sub" id="serverStateText"></p>
+      <div class="server-hours">Paris · 07:00 → 22:00</div>
+      <div class="server-contact">
+        Un problème persiste ? Contactez l’administrateur :<br>
+        <a href="mailto:nathanael.bubbe@gmail.com">nathanael.bubbe@gmail.com</a><br>
+        <button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -229,10 +254,51 @@ const API = 'https://nath.tailffd3b0.ts.net/';
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
 // ═══════════════════════════
+let serverStateShown=false;
+function parisHour(){
+  const s=new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',hour12:false}).format(new Date());
+  return Number(s);
+}
+function serverClosed(){
+  const hour=parisHour();
+  return hour>=22||hour<7;
+}
+function showServerState(){
+  if(serverStateShown)return;
+  serverStateShown=true;
+  hideLoader();
+  const closed=serverClosed();
+  document.getElementById('serverStateIcon').textContent=closed?'🌙':'⚠️';
+  document.getElementById('serverStateTitle').textContent=closed?'Serveur inactif':'Erreur du serveur';
+  document.getElementById('serverStateText').innerHTML=closed
+    ? 'Le serveur est actuellement inactif pendant la plage de maintenance nocturne.<br><b>Il sera de nouveau disponible à partir de 07:00 (heure de Paris).</b>'
+    : 'Le serveur ne répond pas actuellement.<br><b>Merci de réessayer dans quelques instants.</b> Si le problème continue, signalez-le à l’administrateur.';
+  showView('vServerState');
+}
+function retryServer(){
+  serverStateShown=false;
+  goHome();
+  const ses=sessionGet();
+  if(ses)loginSheet(ses);
+}
 async function fetchT(url,opt,action,ms){
   const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);
-  try{const r=await fetch(url,{...opt,signal:ac.signal});return await r.text();}
-  catch(e){if(e.name==='AbortError')throw new Error('Délai dépassé ('+ms/1000+' s) pour « '+action+' » : le script Google ne répond pas');throw e;}
+  try{
+    const r=await fetch(url,{...opt,signal:ac.signal});
+    if(r.status>=500){
+      showServerState();
+      throw new Error('Le serveur a renvoyé une erreur HTTP '+r.status);
+    }
+    return await r.text();
+  }
+  catch(e){
+    if(e.name==='AbortError'){
+      showServerState();
+      throw new Error('Délai dépassé ('+ms/1000+' s) pour « '+action+' » : le serveur ne répond pas');
+    }
+    showServerState();
+    throw e;
+  }
   finally{clearTimeout(t);}
 }
 let wPend=0,writeSeq=0;
@@ -275,15 +341,15 @@ async function api1(action, params={}) {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body
-    }, action, 90000);
-    let d; try { d = JSON.parse(text); } catch(e) { throw new Error('Réponse: '+text.slice(0,200)); }
+    }, action, 20000);
+    let d; try { d = JSON.parse(text); } catch(e) { showServerState(); throw new Error('Réponse serveur invalide'); }
     if (!d.ok) throw new Error(d.error || 'Erreur API');
     return d.data;
   } else {
     // GET pour les lectures
     const qs = Object.entries(flat).map(([k,v]) => encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
-    const text = await fetchT(API + '?' + qs, {}, action, 40000);
-    let d; try { d = JSON.parse(text); } catch(e) { throw new Error('Réponse: '+text.slice(0,200)); }
+    const text = await fetchT(API + '?' + qs, {}, action, 10000);
+    let d; try { d = JSON.parse(text); } catch(e) { showServerState(); throw new Error('Réponse serveur invalide'); }
     if (!d.ok) throw new Error(d.error || 'Erreur API');
     return d.data;
   }
