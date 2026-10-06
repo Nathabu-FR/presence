@@ -220,7 +220,11 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 // ═══════════════════════════
 // CONFIG
 // ═══════════════════════════
-const API = 'https://script.google.com/macros/s/AKfycbxH2xEJLLFj3AalhpUQbXKkDyVyFuup8gTLuK9RvAw4SAkYrC4nIjoLUsdP96euCI6W/exec';
+// Avant mise en ligne sur GitHub Pages (HTTPS), utiliser l'URL Funnel HTTPS
+// (https://nath.tailffd3b0.ts.net/) — une page HTTPS ne peut pas appeler une
+// API en http:// (bloqué par le navigateur, "Mixed Content"). L'URL LAN ci-dessous
+// ne fonctionne que pour un test en local (fichier ouvert directement, ou servi en http).
+const API = 'http://192.168.1.192:5100/';
 
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
@@ -252,7 +256,10 @@ async function api1(action, params={}) {
   //   - pas de limite de taille d'URL
   //   - GAS reçoit via e.parameter exactement comme un GET
   const WRITES = ['saveSeance','saveAppels','saveAppel','saveConfig','savePersonnes','createFeuille','deleteFeuille','resetAppels'];
+  const PUBLIC = ['bootstrap','createFeuille','logout'];
   const p = {action, ...params};
+  // Jeton de session ajouté automatiquement sur toute action protégée (tout sauf login/inscription/déconnexion)
+  if (!PUBLIC.includes(action) && S && S.token) p.token = S.token;
   // Sérialiser les objets
   const flat = {};
   for (const [k,v] of Object.entries(p)) {
@@ -317,7 +324,10 @@ document.getElementById('modalOv').addEventListener('click',e=>{if(e.target.id==
 // ═══════════════════════════
 function showView(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));document.getElementById(id).classList.add('active');}
 function goHome(){showView('vAccueil');}
-function disconnect(){S=null;sessionClear();goHome();}
+function disconnect(){
+  if(S&&S.token)api('logout',{token:S.token}).catch(()=>{}); // invalide le jeton côté serveur, sans bloquer l'UI
+  S=null;sessionClear();goHome();
+}
 function switchTab(name,el){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.tc').forEach(t=>t.classList.remove('active'));
@@ -347,8 +357,10 @@ function renderAuth(){
     box.innerHTML=`<div class="auth-title">Créer une feuille</div><div class="auth-sub">Choisissez un nom et un mot de passe</div>
       <div id="authMsg" style="display:none"></div>
       <div class="field"><label>Nom</label><input type="text" id="cName" placeholder="ex: Atelier Radio"></div>
+      <div class="field"><label>Email</label><input type="email" id="cEmail" placeholder="vous@exemple.fr"></div>
       <div class="field"><label>Mot de passe</label><div class="pwd-wrap"><input type="password" id="cPwd"><button class="pwd-eye" onclick="tPwd('cPwd',this)">👁</button></div></div>
       <div class="field"><label>Confirmer</label><div class="pwd-wrap"><input type="password" id="cPwd2"><button class="pwd-eye" onclick="tPwd('cPwd2',this)">👁</button></div></div>
+      <div class="auth-sub" style="margin-top:8px">Votre demande sera validée manuellement ; vous recevrez un email de confirmation une fois activée.</div>
       <button class="btn" onclick="createSheet()">Créer</button>
       <button class="btn btn-ghost" onclick="showAuth('login')">J'ai déjà une feuille</button>`;
   }else{
@@ -363,34 +375,34 @@ function renderAuth(){
 
 async function createSheet(){
   const name=document.getElementById('cName').value.trim();
+  const email=document.getElementById('cEmail').value.trim();
   const pwd=document.getElementById('cPwd').value;
   const pwd2=document.getElementById('cPwd2').value;
   if(!name)return showMsg('authMsg','Entrez un nom','error');
+  if(!email||!email.includes('@'))return showMsg('authMsg','Entrez un email valide','error');
   if(!pwd)return showMsg('authMsg','Entrez un mot de passe','error');
   if(pwd!==pwd2)return showMsg('authMsg','Mots de passe différents','error');
   const id='s_'+name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
-  showLoader('Création de la feuille...');
+  showLoader('Envoi de la demande...');
   try{
-    await api('createFeuille',{id,name,pwd:btoa(unescape(encodeURIComponent(pwd)))});
-    const cfg={days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
-    await api('saveConfig',{id,data:cfg});
-    await api('savePersonnes',{id,data:[]});
-    S={id,name,pwd:btoa(unescape(encodeURIComponent(pwd))),config:cfg,persons:[],records:{},seances:{},seaLoaded:true};
-    sessionSave();hideLoader();enterApp();
+    // La feuille est créée en statut "en attente" — un email de confirmation
+    // arrivera une fois la demande validée manuellement. Pas de connexion immédiate.
+    await api('createFeuille',{id,name,pwd,email});
+    hideLoader();
+    showMsg('authMsg','Demande envoyée ! Vous recevrez un email une fois votre accès validé.','success');
   }catch(e){hideLoader();showMsg('authMsg','Erreur : '+e.message,'error');}
 }
 
 async function loginSheet(auto){
-  let id,pwdB;
+  let id,pwd,token;
   if(auto){
     id=auto.id;
-    pwdB=auto.pwd;
+    token=auto.token;
   }else{
     const name=document.getElementById('lName').value.trim();
-    const pwd=document.getElementById('lPwd').value;
+    pwd=document.getElementById('lPwd').value;
     if(!name||!pwd)return showMsg('authMsg','Remplissez tous les champs','error');
     id='s_'+name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
-    pwdB=btoa(unescape(encodeURIComponent(pwd)));
   }
 
   const fail=(t,clr)=>{
@@ -406,7 +418,7 @@ async function loginSheet(auto){
   try{
     // UNE SEULE requête HTTP pour authentifier et charger les données essentielles.
     showLoader('Chargement des données...');
-    const boot=await api('bootstrap',{id,pwd:pwdB});
+    const boot=await api('bootstrap', token ? {id,token} : {id,pwd});
     if(!boot)return fail('Feuille introuvable',1);
 
     const cfg=boot.config||{days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
@@ -429,7 +441,7 @@ async function loginSheet(auto){
     S={
       id:boot.feuille.id,
       name:boot.feuille.name,
-      pwd:boot.feuille.pwd,
+      token:boot.token,
       config:cfg,
       persons:safePersons,
       records:boot.records||{},
@@ -1274,10 +1286,10 @@ async function processFullImport(file){
 // ═══════════════════════════
 // SESSION (reste connecté 30 jours) + ACTUALISATION AUTOMATIQUE
 // ═══════════════════════════
-const SES_KEY='presence_session_v1',SES_DAYS=30;
-function sessionSave(){try{localStorage.setItem(SES_KEY,JSON.stringify({id:S.id,name:S.name,pwd:S.pwd,t:Date.now()}));}catch(e){}}
+const SES_KEY='presence_session_v1',SES_DAYS=15; // aligné sur l'expiration du jeton côté serveur
+function sessionSave(){try{localStorage.setItem(SES_KEY,JSON.stringify({id:S.id,name:S.name,token:S.token,t:Date.now()}));}catch(e){}}
 function sessionClear(){try{localStorage.removeItem(SES_KEY);}catch(e){}}
-function sessionGet(){try{const s=JSON.parse(localStorage.getItem(SES_KEY)||'null');return s&&s.id&&s.pwd&&Date.now()-s.t<SES_DAYS*864e5?s:null;}catch(e){return null;}}
+function sessionGet(){try{const s=JSON.parse(localStorage.getItem(SES_KEY)||'null');return s&&s.id&&s.token&&Date.now()-s.t<SES_DAYS*864e5?s:null;}catch(e){return null;}}
 const nrm=o=>JSON.stringify(o,(k,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(x=>[x,v[x]])):v);
 function normLoaded(config,persons){
   const cfg=config||{days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
@@ -1299,7 +1311,7 @@ async function refreshData(){
   refBusy=true;
   try{
     // Une seule requête au lieu de 4 appels parallèles.
-    const boot=await api('bootstrap',{id:sid,pwd:S.pwd});
+    const boot=await api('bootstrap',{id:sid,token:S.token});
     if(!S||S.id!==sid||writeSeq!==w0||wPend>0)return;
 
     const cfg=boot.config||{days:[],timeStart:'18:00',timeEnd:'20:00',yearStart:today(),yearEnd:'',vacances:[]};
