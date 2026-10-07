@@ -173,13 +173,25 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 .subtabs{display:flex;gap:6px;margin-bottom:14px}
 .sub{background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
 .sub.on{border-color:var(--accent);color:var(--accent)}
-.server-state{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at 50% 20%,rgba(67,233,123,.08),transparent 42%),var(--bg);}
-.server-card{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:34px 28px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.25);}
-.server-icon{font-size:52px;margin-bottom:14px}.server-title{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:2px;margin-bottom:8px}
-.server-sub{font-size:14px;color:var(--muted);line-height:1.65;margin:0 auto 20px;max-width:470px}
+.server-state{min-height:100vh;box-sizing:border-box;display:flex;align-items:center;justify-content:center;padding:18px;background:radial-gradient(circle at 50% 20%,rgba(67,233,123,.08),transparent 42%),var(--bg);}
+.server-card{width:100%;max-width:560px;box-sizing:border-box;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:30px 26px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+.server-icon{font-size:52px;line-height:1;margin-bottom:14px}.server-title{font-family:'Bebas Neue',sans-serif;font-size:34px;line-height:1.08;letter-spacing:2px;margin-bottom:10px;color:var(--text)}
+.server-sub{font-size:14px;color:var(--muted);line-height:1.7;margin:0 auto 18px;max-width:490px}
+.server-sub b{color:var(--text)}
+.server-sub a{color:var(--accent2);font-weight:700;text-decoration:underline;text-underline-offset:2px}
 .server-hours{display:inline-block;padding:8px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface2);font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);}
-.server-contact{margin-top:22px;padding-top:18px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.6}
-.server-contact a{color:var(--accent2);text-decoration:none}.server-contact a:hover{text-decoration:underline}
+.server-next{margin:14px auto 0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:rgba(67,233,123,.04);font-size:12px;color:var(--muted);max-width:310px}
+.server-next b{color:var(--accent);font-family:'JetBrains Mono',monospace}
+.server-contact{margin-top:20px;padding-top:18px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);line-height:1.7}
+.server-contact a{color:var(--accent2);font-weight:700;text-decoration:underline;text-underline-offset:2px}.server-contact a:hover{text-decoration:none}
+.server-retry{margin-top:12px}
+@media(max-width:600px){
+  .server-state{padding:12px}
+  .server-card{padding:24px 16px;border-radius:15px}
+  .server-icon{font-size:46px}
+  .server-title{font-size:28px}
+  .server-sub{font-size:13px}
+}
 
 </style>
 </head>
@@ -209,13 +221,18 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
   <div class="server-state">
     <div class="server-card">
       <div class="server-icon" id="serverStateIcon">🌙</div>
-      <div class="server-title" id="serverStateTitle">Serveur momentanément indisponible</div>
+      <div class="server-title" id="serverStateTitle">Le serveur dort</div>
       <p class="server-sub" id="serverStateText"></p>
       <div class="server-hours">Paris · 07:00 → 22:00</div>
-      <div class="server-contact">
-        Un problème persiste ? Contactez l’administrateur :<br>
-        <a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a><br>
-        <button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>
+      <div class="server-next">
+        Prochaine vérification automatique dans
+        <b><span id="serverCountdown">60</span> s</b>
+      </div>
+      <div class="server-contact" id="serverStateContact">
+        Le serveur se réveillera automatiquement à 07:00 (heure de Paris).
+        <div class="server-retry">
+          <button class="btn btn-ghost btn-sm" onclick="retryServer()">Réessayer maintenant</button>
+        </div>
       </div>
     </div>
   </div>
@@ -254,42 +271,88 @@ const API = 'https://nath.tailffd3b0.ts.net/';
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
 // ═══════════════════════════
-let serverStateShown=false,serverRetryTimer=null;
+let serverStateShown=false,serverRetryTimer=null,serverCountdownTimer=null,serverRetryRemaining=60;
+
+function clearServerRetry(){
+  if(serverRetryTimer){clearInterval(serverRetryTimer);serverRetryTimer=null;}
+  if(serverCountdownTimer){clearInterval(serverCountdownTimer);serverCountdownTimer=null;}
+}
+
+function serverRetryReset(){
+  serverRetryRemaining=60;
+  const el=document.getElementById('serverCountdown');
+  if(el)el.textContent=String(serverRetryRemaining);
+}
+
+function serverRetrySchedule(){
+  clearServerRetry();
+  serverRetryReset();
+
+  serverCountdownTimer=setInterval(()=>{
+    if(!serverStateShown)return;
+    serverRetryRemaining=Math.max(0,serverRetryRemaining-1);
+    const el=document.getElementById('serverCountdown');
+    if(el)el.textContent=String(serverRetryRemaining);
+  },1000);
+
+  serverRetryTimer=setInterval(()=>{
+    if(!serverStateShown)return;
+    retryServer();
+  },60000);
+}
+
 function parisHour(){
   const s=new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',hour12:false}).format(new Date());
   return Number(s);
 }
+
 function serverClosed(){
   const hour=parisHour();
   return hour>=22||hour<7;
 }
+
 function showServerState(){
   serverStateShown=true;
-  if(serverRetryTimer)clearInterval(serverRetryTimer);
-  serverRetryTimer=setInterval(()=>retryServer(),60000);
   hideLoader();
+
   const closed=serverClosed();
   document.getElementById('serverStateIcon').textContent=closed?'🌙':'⚠️';
   document.getElementById('serverStateTitle').textContent=closed?'Le serveur dort':'Serveur momentanément indisponible';
+
   document.getElementById('serverStateText').innerHTML=closed
     ? 'Le serveur est actuellement endormi pendant la plage de maintenance nocturne.<br><b>Il sera de nouveau disponible à partir de 07:00 (heure de Paris).</b>'
     : 'Le serveur ne répond pas actuellement.<br><b>Merci de réessayer dans quelques instants.</b><br>Si le problème persiste, signalez-le à l’administrateur via <a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a>.';
-  document.querySelector('.server-contact').innerHTML=closed
-    ? 'Le serveur se réveillera automatiquement à 07:00 (heure de Paris).<br><button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>'
-    : 'Un problème persiste ? Signalez-le à l’administrateur :<br><a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a><br><button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>';
+
+  document.getElementById('serverStateContact').innerHTML=closed
+    ? 'Le serveur se réveillera automatiquement à 07:00 (heure de Paris).<div class="server-retry"><button class="btn btn-ghost btn-sm" onclick="retryServer()">Réessayer maintenant</button></div>'
+    : 'Un problème persiste ? Signalez-le à l’administrateur :<br><a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a><div class="server-retry"><button class="btn btn-ghost btn-sm" onclick="retryServer()">Réessayer maintenant</button></div>';
+
   showView('vServerState');
+
+  // Ne redémarre le chrono que lorsqu'il n'était pas déjà actif.
+  if(!serverRetryTimer && !serverCountdownTimer)serverRetrySchedule();
 }
+
 function retryServer(){
-  serverStateShown=false;
+  serverStateShown=true;
   showView('vServerState');
+  serverRetryReset();
+
   const ses=sessionGet();
   if(ses){
     loginSheet(ses).catch(()=>{});
   }else{
-    serverStateShown=true;
-    showServerState();
+    // Pas de session : on teste simplement si l'API répond.
+    fetchT(API,{},'test de disponibilité du serveur',5000)
+      .then(()=>{
+        clearServerRetry();
+        serverStateShown=false;
+        goHome();
+      })
+      .catch(()=>showServerState());
   }
 }
+
 async function fetchT(url,opt,action,ms){
   const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);
   try{
@@ -530,6 +593,8 @@ async function loginSheet(auto){
     };
 
     sessionSave();
+    clearServerRetry();
+    serverStateShown=false;
     hideLoader();
     enterApp();
 
@@ -1428,8 +1493,27 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshDat
 window.addEventListener('focus',()=>refreshData());
 setInterval(()=>refreshData(),120000);
 
-goHome();
-{const ses=sessionGet();if(ses)loginSheet(ses);}
+async function initialServerCheck(){
+  // Au chargement, on vérifie d'abord que l'API est joignable.
+  // Pendant cette vérification, l'accueil reste masqué derrière le loader.
+  showLoader('Vérification de la disponibilité du serveur...');
+  try{
+    await fetchT(API,{},'vérification de la disponibilité du serveur',7000);
+    clearServerRetry();
+    serverStateShown=false;
+    hideLoader();
+    goHome();
+
+    // Si une session existe, on enchaîne seulement après la vérification.
+    const ses=sessionGet();
+    if(ses)await loginSheet(ses);
+  }catch(e){
+    // fetchT() affiche déjà l'écran adapté (nuit / journée).
+    showServerState();
+  }
+}
+
+initialServerCheck();
 </script>
 </body>
 </html>
