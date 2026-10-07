@@ -14,6 +14,8 @@
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;overflow-x:hidden;}
 body{min-height:100vh;background-attachment:fixed;background-image:radial-gradient(ellipse 80% 50% at 10% 0%,rgba(67,233,123,.05) 0%,transparent 60%),radial-gradient(ellipse 60% 40% at 90% 100%,rgba(0,198,255,.04) 0%,transparent 60%);}
 ::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:var(--surface);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+.status-banner{display:none;position:sticky;top:0;left:0;right:0;z-index:999;padding:10px 16px;text-align:center;font-size:13px;font-weight:600;background:linear-gradient(90deg,var(--orange),#e64980);color:#111;}
+.status-banner.show{display:block;}
 .view{display:none;min-height:100vh;padding:24px 16px;}.view.active{display:block;}
 #vAccueil,#vAuth{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;}
 #vAccueil.active,#vAuth.active{display:flex;}
@@ -186,6 +188,7 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 <body>
 <div id="toast"></div>
 <div id="loader"><div class="spinner"></div><div class="loader-msg" id="loaderMsg">Chargement...</div></div>
+<div id="statusBanner" class="status-banner">⚠️ <span id="statusBannerText"></span></div>
 
 <!-- ACCUEIL -->
 <div id="vAccueil" class="view">
@@ -1414,6 +1417,31 @@ async function refreshData(){
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshData();});
 window.addEventListener('focus',()=>refreshData());
 setInterval(()=>refreshData(),120000);
+
+// ───── Bannière de statut serveur (publiée par le bot Discord dans status.json sur GitHub) ─────
+// Le bot écrit/efface ce fichier ; s'il est absent (404), on considère que tout va bien.
+const STATUS_URL = 'https://raw.githubusercontent.com/Nathabu-FR/presence/main/status.json';
+async function checkServerStatus(){
+  try{
+    const res = await fetch(STATUS_URL + '?t=' + Date.now(), {cache:'no-store'});
+    if(!res.ok){ hideStatusBanner(); return; } // 404 = pas de fichier = tout va bien
+    const s = await res.json();
+    if(s && s.online === false && s.message){
+      document.getElementById('statusBannerText').textContent = s.message;
+      document.getElementById('statusBanner').classList.add('show');
+    } else {
+      hideStatusBanner();
+    }
+  }catch(e){
+    // En cas d'échec réseau sur ce check précis, on ne bloque rien : silence.
+    console.warn('[status]', e.message);
+  }
+}
+function hideStatusBanner(){
+  document.getElementById('statusBanner').classList.remove('show');
+}
+checkServerStatus();
+setInterval(checkServerStatus, 60000);
 
 goHome();
 {const ses=sessionGet();if(ses)loginSheet(ses);}
