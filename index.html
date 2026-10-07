@@ -14,8 +14,6 @@
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;overflow-x:hidden;}
 body{min-height:100vh;background-attachment:fixed;background-image:radial-gradient(ellipse 80% 50% at 10% 0%,rgba(67,233,123,.05) 0%,transparent 60%),radial-gradient(ellipse 60% 40% at 90% 100%,rgba(0,198,255,.04) 0%,transparent 60%);}
 ::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:var(--surface);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
-.status-banner{display:none;position:sticky;top:0;left:0;right:0;z-index:999;padding:10px 16px;text-align:center;font-size:13px;font-weight:600;background:linear-gradient(90deg,var(--orange),#e64980);color:#111;}
-.status-banner.show{display:block;}
 .view{display:none;min-height:100vh;padding:24px 16px;}.view.active{display:block;}
 #vAccueil,#vAuth{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;}
 #vAccueil.active,#vAuth.active{display:flex;}
@@ -188,7 +186,6 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
 <body>
 <div id="toast"></div>
 <div id="loader"><div class="spinner"></div><div class="loader-msg" id="loaderMsg">Chargement...</div></div>
-<div id="statusBanner" class="status-banner">⚠️ <span id="statusBannerText"></span></div>
 
 <!-- ACCUEIL -->
 <div id="vAccueil" class="view">
@@ -217,7 +214,7 @@ body{min-height:100vh;background-attachment:fixed;background-image:radial-gradie
       <div class="server-hours">Paris · 07:00 → 22:00</div>
       <div class="server-contact">
         Un problème persiste ? Contactez l’administrateur :<br>
-        <a href="mailto:nathanael.bubbe@gmail.com">nathanael.bubbe@gmail.com</a><br>
+        <a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a><br>
         <button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>
       </div>
     </div>
@@ -257,7 +254,7 @@ const API = 'https://nath.tailffd3b0.ts.net/';
 // ═══════════════════════════
 // API — TOUTES LES ACTIONS
 // ═══════════════════════════
-let serverStateShown=false;
+let serverStateShown=false,serverRetryTimer=null;
 function parisHour(){
   const s=new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',hour12:false}).format(new Date());
   return Number(s);
@@ -267,22 +264,31 @@ function serverClosed(){
   return hour>=22||hour<7;
 }
 function showServerState(){
-  if(serverStateShown)return;
   serverStateShown=true;
+  if(serverRetryTimer)clearInterval(serverRetryTimer);
+  serverRetryTimer=setInterval(()=>retryServer(),60000);
   hideLoader();
   const closed=serverClosed();
   document.getElementById('serverStateIcon').textContent=closed?'🌙':'⚠️';
-  document.getElementById('serverStateTitle').textContent=closed?'Serveur inactif':'Erreur du serveur';
+  document.getElementById('serverStateTitle').textContent=closed?'Le serveur dort':'Serveur momentanément indisponible';
   document.getElementById('serverStateText').innerHTML=closed
-    ? 'Le serveur est actuellement inactif pendant la plage de maintenance nocturne.<br><b>Il sera de nouveau disponible à partir de 07:00 (heure de Paris).</b>'
-    : 'Le serveur ne répond pas actuellement.<br><b>Merci de réessayer dans quelques instants.</b> Si le problème continue, signalez-le à l’administrateur.';
+    ? 'Le serveur est actuellement endormi pendant la plage de maintenance nocturne.<br><b>Il sera de nouveau disponible à partir de 07:00 (heure de Paris).</b>'
+    : 'Le serveur ne répond pas actuellement.<br><b>Merci de réessayer dans quelques instants.</b><br>Si le problème persiste, signalez-le à l’administrateur via <a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a>.';
+  document.querySelector('.server-contact').innerHTML=closed
+    ? 'Le serveur se réveillera automatiquement à 07:00 (heure de Paris).<br><button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>'
+    : 'Un problème persiste ? Signalez-le à l’administrateur :<br><a href="https://www.nathabu.fr/contactus" target="_blank" rel="noopener noreferrer">nathabu.fr/contactus</a><br><button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="retryServer()">Réessayer</button>';
   showView('vServerState');
 }
 function retryServer(){
   serverStateShown=false;
-  goHome();
+  showView('vServerState');
   const ses=sessionGet();
-  if(ses)loginSheet(ses);
+  if(ses){
+    loginSheet(ses).catch(()=>{});
+  }else{
+    serverStateShown=true;
+    showServerState();
+  }
 }
 async function fetchT(url,opt,action,ms){
   const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);
@@ -478,8 +484,12 @@ async function loginSheet(auto){
     hideLoader();
     if(auto){
       if(clr)sessionClear();
-      goHome();
-      toast(t,'err');
+      if(serverStateShown){
+        showServerState();
+      }else{
+        goHome();
+        toast(t,'err');
+      }
     }else showMsg('authMsg',t,'error');
   };
 
@@ -1417,31 +1427,6 @@ async function refreshData(){
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshData();});
 window.addEventListener('focus',()=>refreshData());
 setInterval(()=>refreshData(),120000);
-
-// ───── Bannière de statut serveur (publiée par le bot Discord dans status.json sur GitHub) ─────
-// Le bot écrit/efface ce fichier ; s'il est absent (404), on considère que tout va bien.
-const STATUS_URL = 'https://raw.githubusercontent.com/Nathabu-FR/presence/main/status.json';
-async function checkServerStatus(){
-  try{
-    const res = await fetch(STATUS_URL + '?t=' + Date.now(), {cache:'no-store'});
-    if(!res.ok){ hideStatusBanner(); return; } // 404 = pas de fichier = tout va bien
-    const s = await res.json();
-    if(s && s.online === false && s.message){
-      document.getElementById('statusBannerText').textContent = s.message;
-      document.getElementById('statusBanner').classList.add('show');
-    } else {
-      hideStatusBanner();
-    }
-  }catch(e){
-    // En cas d'échec réseau sur ce check précis, on ne bloque rien : silence.
-    console.warn('[status]', e.message);
-  }
-}
-function hideStatusBanner(){
-  document.getElementById('statusBanner').classList.remove('show');
-}
-checkServerStatus();
-setInterval(checkServerStatus, 60000);
 
 goHome();
 {const ses=sessionGet();if(ses)loginSheet(ses);}
